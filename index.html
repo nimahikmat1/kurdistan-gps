@@ -150,6 +150,7 @@ html,body{height:100%;overflow:hidden;font-family:'Outfit',sans-serif;background
 #zoom-box{display:flex;flex-direction:column;gap:0}
 #zoom-in{border-radius:13px 13px 4px 4px;border-bottom:1px solid rgba(251,191,36,.2)}
 #zoom-out{border-radius:4px 4px 13px 13px}
+#layer-label{font-size:11px;color:#fbbf24;text-align:center;padding:4px 8px;margin:4px auto 0;border-radius:14px;background:rgba(15,23,42,.9);border:1px solid rgba(251,191,36,.25);min-width:78px;max-width:96px;line-height:1.2}
 
 /* ── Speed card ── */
 #speed-card{
@@ -437,13 +438,14 @@ html,body{height:100%;overflow:hidden;font-family:'Outfit',sans-serif;background
       <polygon points="3 11 22 2 13 21 11 13 3 11"/>
     </svg>
   </button>
-  <button class="mb" id="btn-layer" title="Switch map layer" onclick="cycleLayer()">
+  <button class="mb" id="btn-layer" title="Switch map mode" onclick="cycleLayer()">
     <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
       <polygon points="12 2 2 7 12 12 22 7 12 2"/>
       <polyline points="2 17 12 22 22 17"/>
       <polyline points="2 12 12 17 22 12"/>
     </svg>
   </button>
+  <div id="layer-label">Streets</div>
   <button class="mb" id="btn-favs" title="Saved places" onclick="openFavs()">⭐</button>
   <div id="zoom-box">
     <button class="mb" id="zoom-in" onclick="safeZoomIn()">+</button>
@@ -506,7 +508,8 @@ var map, userMarker, accCircle, routePolyline, destMarker;
 var myLat = null, myLon = null, myHeading = null;
 var followMode = true, navMode = false, navStep = 0;
 var route = null, destLabel = '', destLat = null, destLon = null;
-var layerNames = ['streets','satellite','bing'], layerIdx = 0;
+var layerNames = ['streets','bing','terrain'], layerIdx = 0;
+var layerLabels = {streets:'Streets', bing:'Satellite', terrain:'Terrain'};
 var searchTimer = null, toastTimer = null, lastRecalc = 0;
 var routeStartTime = null, routeTotalDist = 0;
 var recognition = null;
@@ -527,34 +530,18 @@ var tileLayers = {
   streets: L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution:'&copy; OpenStreetMap',maxZoom:20,detectRetina:true,keepBuffer:8
   }),
-  satellite: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-    attribution:'&copy; Esri',maxZoom:19,detectRetina:true,keepBuffer:8
-  }),
-  // Note: Bing uses quadkeys; create a small TileLayer subclass to compute quadkey URLs
-  // We'll expose a high-res Bing layer as `bing` for the user.
   bing: (function(){
-    var Bing = L.TileLayer.extend({
-      getTileUrl: function(coords) {
-        var x = coords.x, y = coords.y, z = coords.z;
-        var quad = '';
-        for (var i = z; i > 0; i--) {
-          var bit = 0;
-          var mask = 1 << (i - 1);
-          if ((x & mask) !== 0) bit += 1;
-          if ((y & mask) !== 0) bit += 2;
-          quad += bit;
-        }
-        var sArr = Array.isArray(this.options.subdomains)
-          ? this.options.subdomains
-          : String(this.options.subdomains || '0123').split('');
-        var s = sArr[(x + y) % sArr.length];
-        return L.Util.template(this._url, L.extend({quadkey: quad, s: s}, this.options));
-      }
+    var imagery = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+      attribution:'&copy; Esri World Imagery',maxZoom:19,detectRetina:true,keepBuffer:8
     });
-    return new Bing('https://ecn.t{s}.tiles.virtualearth.net/tiles/a{quadkey}.jpeg?g=13624&mkt=en-US', {
-      attribution: '&copy; Microsoft Bing Maps', subdomains: '0123', maxZoom:20, detectRetina:true, keepBuffer:8
+    var labels = L.tileLayer('https://stamen-tiles.a.ssl.fastly.net/toner-labels/{z}/{x}/{y}.png', {
+      attribution:'Map labels by Stamen Design, CC BY 3.0 — Data © OpenStreetMap contributors',maxZoom:20,detectRetina:true,keepBuffer:8,opacity:0.9
     });
-  })()
+    return L.layerGroup([imagery, labels]);
+  })(),
+  terrain: L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
+    attribution:'&copy; OpenTopoMap contributors',maxZoom:17,detectRetina:true,keepBuffer:8,subdomains:['a','b','c']
+  })
 };
 
 // ─── Init ───
@@ -564,6 +551,7 @@ window.addEventListener('DOMContentLoaded', function() {
     zoomControl:false, attributionControl:true, preferCanvas:true
   });
   tileLayers.streets.addTo(map);
+  updateLayerLabel();
 
   map.on('dragstart', function() { if (!navMode) { followMode=false; updateFollowBtn(); } });
   map.on('zoomend', function() {
@@ -696,23 +684,15 @@ function updateUserMarkerArrow(heading) {
 function rotateMapToHeading(heading) {
   // Leaflet doesn't natively rotate, so we rotate the tile pane CSS
   mapRotation = heading;
-  var pane = map.getPanes().mapPane;
-  if (!pane) return;
-  // Instead of rotating the whole pane (which breaks controls), 
-  // we use CSS transform on the map container's tile layers only
-  var container = map.getContainer();
-  // We rotate via a wrapper approach: rotate tiles but not UI
   var tilePane = map.getPanes().tilePane;
   var overlayPane = map.getPanes().overlayPane;
   var shadowPane = map.getPanes().shadowPane;
+  var center = map.getSize().divideBy(2);
   [tilePane, overlayPane, shadowPane].forEach(function(p) {
-    if (p) p.style.transform = 'rotate('+(-heading)+'deg)';
+    if (!p) return;
+    p.style.transformOrigin = center.x + 'px ' + center.y + 'px';
+    p.style.transform = 'rotate('+(-heading)+'deg)';
   });
-  // Counter-rotate markers so they stay upright
-  var markerPane = map.getPanes().markerPane;
-  if (markerPane) {
-    // Don't counter-rotate markerPane itself — we handle per-marker
-  }
   // Compass rose indicator
   updateCompassRose(heading);
 }
@@ -731,7 +711,10 @@ function resetMapRotation() {
   var panes = ['tilePane','overlayPane','shadowPane'];
   panes.forEach(function(name) {
     var p = map.getPanes()[name];
-    if (p) p.style.transform = '';
+    if (p) {
+      p.style.transform = '';
+      p.style.transformOrigin = '';
+    }
   });
   updateCompassRose(0);
 }
@@ -742,6 +725,11 @@ function toggleRotateMap() {
   if (rotateMap) {
     btn.textContent = '🔄 HEAD-UP';
     btn.style.borderColor = 'rgba(251,191,36,.3)';
+    if (myLat !== null && !followMode) {
+      followMode = true;
+      updateFollowBtn();
+      map.setView([myLat, myLon], Math.max(map.getZoom(), 16), {animate:true});
+    }
     if (deviceHeading !== null) applyHeading(deviceHeading);
     else if (gpsHeading !== null) applyHeading(gpsHeading);
     toast('Head-up mode on');
@@ -852,7 +840,15 @@ function cycleLayer() {
   var next=layerNames[layerIdx];
   map.removeLayer(tileLayers[prev]);
   tileLayers[next].addTo(map);
-  toast('Map: '+next.charAt(0).toUpperCase()+next.slice(1));
+  var label = layerLabels[next] || next.charAt(0).toUpperCase()+next.slice(1);
+  updateLayerLabel();
+  toast('Map: '+label);
+}
+
+function updateLayerLabel() {
+  var label = layerLabels[layerNames[layerIdx]] || layerNames[layerIdx];
+  var el = document.getElementById('layer-label');
+  if (el) el.textContent = label;
 }
 
 function safeZoomIn(){ if (typeof map !== 'undefined' && map) map.zoomIn(); }
@@ -938,11 +934,11 @@ function fuzzyScore(query, target, distKm) {
     }
   }
 
-  // 4. Distance bonus — closer = much higher rank for nearby results
+  // 4. Distance bonus — closer results should rank much higher
   if (distKm !== undefined && distKm !== null && !isNaN(distKm)) {
-    var distBonus = Math.max(0, 100 - distKm * 3);
-    if (distKm < 3) distBonus += 12;
-    if (distKm < 1) distBonus += 8;
+    var distBonus = Math.round(84 - distKm * 2.5);
+    if (distKm < 3) distBonus += 18;
+    if (distKm < 1) distBonus += 10;
     score += distBonus;
   }
 
