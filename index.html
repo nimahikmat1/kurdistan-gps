@@ -553,10 +553,12 @@ window.addEventListener('DOMContentLoaded', function() {
   tileLayers.streets.addTo(map);
   updateLayerLabel();
 
-  map.on('dragstart', function() { if (!navMode) { followMode=false; updateFollowBtn(); } });
+  map.on('dragstart', function() { if (!navMode && !rotateMap) { followMode=false; updateFollowBtn(); } });
   map.on('zoomend', function() {
     document.getElementById('scale-box').textContent = 'Zoom ' + map.getZoom();
   });
+  // Keep pane origins updated while interacting so rotation stays anchored
+  map.on('move zoom resize', function(){ _updatePaneOriginsIfRotated(); });
 
   // Long-press on map to set destination
   var pressTimer = null;
@@ -593,6 +595,16 @@ window.addEventListener('DOMContentLoaded', function() {
     setTimeout(function(){ l.style.display='none'; }, 500);
   }, 1000);
 });
+
+// Keep rotated panes anchored when map moves/zooms
+function _updatePaneOriginsIfRotated() {
+  if (!map || !mapRotation) return;
+  var center = map.getSize().divideBy(2);
+  ['tilePane','overlayPane','shadowPane'].forEach(function(name) {
+    var p = map.getPanes()[name];
+    if (p) p.style.transformOrigin = center.x + 'px ' + center.y + 'px';
+  });
+}
 
 // ─── GPS & Orientation ───
 function initGPS() {
@@ -717,6 +729,10 @@ function resetMapRotation() {
     }
   });
   updateCompassRose(0);
+  // Make sure interactions are back to normal
+  if (map && map.dragging) map.dragging.enable();
+  if (map && map.doubleClickZoom) map.doubleClickZoom.enable();
+  if (map && map.boxZoom) map.boxZoom.enable();
 }
 
 function toggleRotateMap() {
@@ -730,13 +746,23 @@ function toggleRotateMap() {
       updateFollowBtn();
       map.setView([myLat, myLon], Math.max(map.getZoom(), 16), {animate:true});
     }
+    // While in head-up, restrict free panning to avoid transform conflicts
+    if (map && map.dragging) map.dragging.disable();
+    if (map && map.doubleClickZoom) map.doubleClickZoom.disable();
+    if (map && map.boxZoom) map.boxZoom.disable();
     if (deviceHeading !== null) applyHeading(deviceHeading);
     else if (gpsHeading !== null) applyHeading(gpsHeading);
+    _updatePaneOriginsIfRotated();
     toast('Head-up mode on');
   } else {
     btn.textContent = '🗺️ NORTH-UP';
     btn.style.borderColor = 'rgba(96,165,250,.5)';
     resetMapRotation();
+    // Re-enable interactions when leaving head-up
+    if (map && map.dragging) map.dragging.enable();
+    if (map && map.doubleClickZoom) map.doubleClickZoom.enable();
+    if (map && map.boxZoom) map.boxZoom.enable();
+    _updatePaneOriginsIfRotated();
     toast('North-up mode');
   }
 }
