@@ -543,7 +543,11 @@ window.addEventListener('DOMContentLoaded', function() {
   tileLayers.streets.addTo(map);
   updateLayerLabel();
 
-  map.on('dragstart', function() { if (!navMode && !rotateMap) { followMode=false; updateFollowBtn(); } });
+  // Free-view (drag-to-disable-follow) removed to avoid buggy state on mobile
+  // Keep app always following the user: disable free panning, hide the follow toggle
+  followMode = true; updateFollowBtn();
+  if (map && map.dragging) map.dragging.disable();
+  var fb = document.getElementById('btn-follow'); if (fb) fb.style.display = 'none';
   map.on('zoomend', function() {
     document.getElementById('scale-box').textContent = 'Zoom ' + map.getZoom();
   });
@@ -792,9 +796,10 @@ function goToMe() {
 
 // ─── Follow / Layer ───
 function toggleFollow() {
-  followMode=!followMode; updateFollowBtn();
-  if (followMode && myLat!==null) map.setView([myLat,myLon],17,{animate:true});
-  toast(followMode?'Following GPS':'Free view');
+  // Free-view disabled by user request — keep following and inform user
+  followMode = true; updateFollowBtn();
+  if (myLat!==null) map.setView([myLat,myLon],17,{animate:true});
+  toast('Free-view disabled — always following');
 }
 function updateFollowBtn() {
   document.getElementById('btn-follow').classList.toggle('active',followMode);
@@ -1414,14 +1419,14 @@ function startNav() {
   if (!route) return;
   navMode=true; navStep=0; followMode=true; updateFollowBtn();
   routeStartTime = Date.now();
-  rotateMap = true;
+  // rotation disabled — head-up/first-person removed
   document.getElementById('route-panel').style.display='none';
   document.getElementById('hud').style.display='none';
   document.getElementById('speed-card').style.display='none';
   document.getElementById('nav-bar').style.display='flex';
   document.getElementById('btn-end').style.display='block';
   document.getElementById('eta-card').style.display='block';
-  var _cw=document.getElementById('compass-wrap'); if (_cw) _cw.style.display='flex';
+  var _cw=document.getElementById('compass-wrap'); if (_cw) _cw.style.display='none';
   renderNavStep(0);
   updateETA();
   if (myLat!==null) map.setView([myLat,myLon],18,{animate:true});
